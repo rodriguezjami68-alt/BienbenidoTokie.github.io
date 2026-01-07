@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Confirmación de Asistencia - Tookie</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- React & Firebase Scripts -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+    
+    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=Inter:wght@400;600;900&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .font-serif { font-family: 'Playfair Display', serif; }
+        .custom-scrollbar::-webkit-scrollbar { width: 5px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 10px; }
+        .animate-fade-in { animation: fadeIn 1s ease-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+    </style>
+</head>
+<body class="bg-slate-50">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        // --- CONFIGURACIÓN DE INTEGRACIONES ---
+        const firebaseConfig = JSON.parse(__firebase_config);
+        const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyt73ZH0O6Urebrf2-rc78OTqqtHlB0t1c4ryj3ubzQ0bKWpESqsl4tB7Zu51f-MnCq4w/exec";
+        const MAP_IFRAME_SRC = "https://www.google.com/maps/embed?pb=!1m18!1m12!1m3!1d3950.322881944621!2d-79.0398604!3d-8.122312!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!3m3!1m2!1s0x91ad3d994993d055%3A0xe54696014f346908!2sC.%20San%20Marcos%20216%2C%20Trujillo%2013008!5e0!3m2!1ses!2spe!4v1704657000000!5m2!1ses!2spe";
+
+        // Inicializar Firebase
+        if (!firebase.apps.length) {
+            firebase.initializeApp(firebaseConfig);
+        }
+        const auth = firebase.auth();
+        const db = firebase.firestore();
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'rsvp-event-app';
+
+        function App() {
+            const [user, setUser] = React.useState(null);
+            const [submitted, setSubmitted] = React.useState(false);
+            const [responses, setResponses] = React.useState([]);
+            const [showAdmin, setShowAdmin] = React.useState(false);
+            const [loading, setLoading] = React.useState(true);
+            const [formData, setFormData] = React.useState({
+                name: '', attending: 'yes', guests: 1, message: ''
+            });
+
+            React.useEffect(() => {
+                const initFirebase = async () => {
+                    try {
+                        // REGLA DE ORO: Autenticarse ANTES de cualquier consulta a Firestore
+                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                            await auth.signInWithCustomToken(__initial_auth_token);
+                        } else {
+                            await auth.signInAnonymously();
+                        }
+                    } catch (error) {
+                        console.error("Error en la autenticación:", error);
+                    }
+                };
+
+                initFirebase();
+
+                const unsubscribeAuth = auth.onAuthStateChanged(u => {
+                    setUser(u);
+                    setLoading(false);
+                });
+
+                return () => unsubscribeAuth();
+            }, []);
+
+            React.useEffect(() => {
+                if (!user) return;
+
+                // REGLA: Usar la ruta estricta /artifacts/{appId}/public/data/{collection}
+                const responsesRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('responses');
+                
+                const unsubscribeData = responsesRef.onSnapshot(snapshot => {
+                    const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    setResponses(data);
+                }, error => {
+                    console.error("Error en el listener de Firestore:", error);
+                });
+
+                return () => unsubscribeData();
+            }, [user]);
+
+            const handleSubmit = async (e) => {
+                e.preventDefault();
+                if (!user) return;
+
+                const payload = {
+                    ...formData,
+                    timestamp: new Date().toISOString(),
+                    userId: user.uid
+                };
+
+                try {
+                    // Guardar usando la ruta estricta para evitar errores de permisos
+                    await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('responses').add(payload);
+                    
+                    // Sincronizar con Google Sheets (opcional, vía Apps Script)
+                    fetch(GOOGLE_SCRIPT_URL, {
+                        method: 'POST',
+                        mode: 'no-cors',
+                        body: JSON.stringify(payload)
+                    });
+
+                    setSubmitted(true);
+                } catch (err) {
+                    console.error("Error al guardar:", err);
+                }
+            };
+
+            if (loading) return (
+                <div className="h-screen flex flex-col items-center justify-center bg-slate-50">
+                    <div className="w-12 h-12 border-4 border-indigo-200 border-t-indigo-600 rounded-full animate-spin mb-4"></div>
+                    <p className="text-slate-600 font-medium">Cargando invitación...</p>
+                </div>
+            );
+
+            return (
+                <div className="min-h-screen pb-20">
+                    <header className="relative h-[450px] bg-[#1a1a1a] flex items-center justify-center text-white overflow-hidden">
+                        <div className="absolute inset-0 opacity-60 bg-[url('https://images.unsplash.com/photo-1530103043960-ef38714abb15?auto=format&fit=crop&q=80&w=1200')] bg-cover bg-center"></div>
+                        <div className="absolute inset-0 bg-gradient-to-t from-[#1a1a1a] via-transparent to-black/30"></div>
+                        
+                        <div className="relative text-center px-4 max-w-3xl animate-fade-in">
+                            <div className="mb-6 flex justify-center">
+                                <div className="w-20 h-20 bg-white/10 backdrop-blur-md rounded-full border border-white/20 flex items-center justify-center text-4xl shadow-2xl">🎉</div>
+                            </div>
+                            <h1 className="text-5xl md:text-8xl font-serif mb-6 drop-shadow-lg tracking-tight">Bienvenido Tookie</h1>
+                            <div className="flex flex-col items-center gap-4 text-lg">
+                                <span className="bg-indigo-600/90 px-8 py-2 rounded-full backdrop-blur-md border border-white/10 shadow-xl">📅 12 de Enero</span>
+                                <span className="bg-black/50 px-6 py-2 rounded-full backdrop-blur-md border border-white/10 text-sm md:text-base">📍 Calle San Marcos 216, San Andrés III Etapa</span>
+                            </div>
+                        </div>
+                    </header>
+
+                    <main className="max-w-6xl mx-auto px-4 py-12 -mt-16 relative z-10">
+                        {!showAdmin ? (
+                            <div className="grid lg:grid-cols-3 gap-8">
+                                <div className="lg:col-span-2 bg-white rounded-3xl shadow-2xl overflow-hidden border border-slate-100">
+                                    <div className="h-2 bg-gradient-to-r from-indigo-500 to-purple-600 w-full"></div>
+                                    <div className="p-8 md:p-12">
+                                        {!submitted ? (
+                                            <form onSubmit={handleSubmit} className="space-y-8">
+                                                <h2 className="text-3xl font-bold text-slate-800">Confirma tu asistencia</h2>
+                                                <div>
+                                                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-widest mb-2">Nombre Completo</label>
+                                                    <input required type="text" className="w-full px-5 py-4 bg-slate-50 border border-slate-200 rounded-2xl outline-none focus:border-indigo-500 text-lg" placeholder="Tu nombre" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} />
+                                                </div>
+                                                <div className="grid grid-cols-2 gap-4">
+                                                    <button type="button" onClick={() => setFormData({...formData, attending: 'yes'})} className={`p-4 rounded-2xl border-2 font-bold transition-all ${formData.attending === 'yes' ? 'border-indigo-600 bg-indigo-50 text-indigo-700 ring-2 ring-indigo-100' : 'border-slate-100 bg-slate-50 text-slate-400'}`}>Sí, asistiré</button>
+                                                    <button type="button" onClick={() => setFormData({...formData, attending: 'no', guests: 0})} className={`p-4 rounded-2xl border-2 font-bold transition-all ${formData.attending === 'no' ? 'border-red-500 bg-red-50 text-red-700 ring-2 ring-red-100' : 'border-slate-100 bg-slate-50 text-slate-400'}`}>No podré ir</button>
+                                                </div>
+                                                {formData.attending === 'yes' && (
+                                                    <div className="animate-fade-in">
+                                                        <label className="block text-xs font-bold text-slate-500 mb-3 uppercase tracking-widest">¿Cuántas personas?</label>
+                                                        <div className="flex gap-2 flex-wrap">
+                                                            {[1,2,3,4,5,6].map(n => (
+                                                                <button key={n} type="button" onClick={() => setFormData({...formData, guests: n})} className={`w-12 h-12 rounded-xl border-2 font-bold transition-all ${formData.guests === n ? 'bg-indigo-600 text-white border-indigo-600 shadow-md scale-110' : 'border-slate-200 text-slate-500 hover:border-indigo-300'}`}>{n}</button>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                )}
+                                                <div>
+                                                    <label className="block text-xs font-bold text-slate-500 mb-2 uppercase tracking-widest">Mensaje (Opcional)</label>
+                                                    <textarea className="w-full px-5 py-4 bg-slate-50 border border-slate-200 rounded-2xl outline-none focus:border-indigo-500 h-24 transition-all" placeholder="Escribe algo aquí..." value={formData.message} onChange={e => setFormData({...formData, message: e.target.value})}></textarea>
+                                                </div>
+                                                <button type="submit" className="w-full bg-indigo-600 text-white font-black py-5 rounded-2xl hover:bg-indigo-700 shadow-xl text-xl transition-all active:scale-[0.98]">ENVIAR MI CONFIRMACIÓN</button>
+                                            </form>
+                                        ) : (
+                                            <div className="text-center py-20 animate-fade-in">
+                                                <div className="text-6xl mb-6">✅</div>
+                                                <h2 className="text-4xl font-black text-slate-900 mb-4">¡Confirmado!</h2>
+                                                <p className="text-slate-500 mb-8">Tu respuesta se ha guardado correctamente.</p>
+                                                <button onClick={() => setSubmitted(false)} className="bg-slate-100 px-6 py-2 rounded-full text-slate-600 font-bold hover:bg-slate-200">Editar mi respuesta</button>
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+
+                                <div className="space-y-6">
+                                    <div className="bg-white rounded-3xl shadow-xl p-8 border border-slate-100">
+                                        <h3 className="text-xl font-bold mb-4 text-slate-800">Asistentes Totales</h3>
+                                        <div className="bg-indigo-600 p-8 rounded-2xl text-center text-white shadow-lg shadow-indigo-100">
+                                            <span className="text-6xl font-black">
+                                                {responses.reduce((acc, curr) => acc + (curr.attending === 'yes' ? parseInt(curr.guests || 0) : 0), 0)}
+                                            </span>
+                                        </div>
+                                    </div>
+                                    <div className="bg-white rounded-3xl shadow-xl p-6 border border-slate-100 overflow-hidden">
+                                        <h3 className="text-lg font-bold mb-4 text-slate-800">Confirmaciones recientes</h3>
+                                        <div className="space-y-3 max-h-60 overflow-y-auto custom-scrollbar pr-2">
+                                            {responses.length === 0 ? (
+                                                <p className="text-slate-400 text-sm italic">Esperando primeras confirmaciones...</p>
+                                            ) : (
+                                                responses.slice().reverse().slice(0, 10).map(r => (
+                                                    <div key={r.id} className="text-sm flex justify-between items-center border-b border-slate-50 pb-2">
+                                                        <span className="font-bold truncate max-w-[120px] text-slate-700">{r.name}</span>
+                                                        <span className={`px-2 py-1 rounded-lg text-[10px] font-bold ${r.attending === 'yes' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-500'}`}>
+                                                            {r.attending === 'yes' ? `SÍ (${r.guests})` : 'NO'}
+                                                        </span>
+                                                    </div>
+                                                ))
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="bg-white rounded-3xl shadow-2xl p-8 border border-slate-200 animate-fade-in">
+                                <div className="flex justify-between items-center mb-6">
+                                    <h2 className="text-2xl font-black text-slate-800">Panel de Administración</h2>
+                                    <button onClick={() => setShowAdmin(false)} className="bg-slate-100 px-4 py-2 rounded-xl font-bold hover:bg-slate-200 transition-colors">Cerrar</button>
+                                </div>
+                                <div className="overflow-x-auto">
+                                    <table className="w-full text-left">
+                                        <thead><tr className="border-b text-xs text-slate-400 uppercase font-black"><th className="pb-3 px-2">Invitado</th><th className="pb-3 text-center">Asiste</th><th className="pb-3 text-center">Cant.</th><th className="pb-3">Mensaje</th></tr></thead>
+                                        <tbody className="divide-y divide-slate-50">
+                                            {responses.map(r => (
+                                                <tr key={r.id} className="hover:bg-slate-50 transition-colors">
+                                                    <td className="py-4 px-2 font-bold text-slate-700">{r.name}</td>
+                                                    <td className="py-4 text-center">
+                                                        <span className={`px-2 py-1 rounded-md text-[10px] font-black ${r.attending === 'yes' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-600'}`}>
+                                                            {r.attending === 'yes' ? 'SÍ' : 'NO'}
+                                                        </span>
+                                                    </td>
+                                                    <td className="py-4 text-center font-bold text-slate-500">{r.attending === 'yes' ? r.guests : '-'}</td>
+                                                    <td className="py-4 text-xs text-slate-400 italic max-w-xs truncate">{r.message || "-"}</td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        )}
+
+                        <div className="mt-12 bg-white rounded-3xl shadow-xl overflow-hidden border border-slate-100">
+                            <div className="p-6 flex flex-col md:flex-row justify-between items-center bg-slate-50/50">
+                                <div className="flex items-center gap-3">
+                                    <div className="bg-indigo-100 p-3 rounded-xl text-indigo-600">📍</div>
+                                    <div>
+                                        <h4 className="font-bold text-slate-800">Ubicación de la Recepción</h4>
+                                        <p className="text-xs text-slate-500 uppercase font-bold tracking-widest">San Andrés III Etapa</p>
+                                    </div>
+                                </div>
+                                <a href="https://maps.app.goo.gl/Jax8kmKTEGU4gajV9" target="_blank" className="mt-4 md:mt-0 bg-indigo-600 text-white px-8 py-3 rounded-xl font-bold shadow-lg shadow-indigo-100 flex items-center gap-2 hover:bg-indigo-700 transition-all">
+                                    <span>MAPA COMPLETO</span>
+                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" /></svg>
+                                </a>
+                            </div>
+                            <div className="w-full h-[450px]">
+                                <iframe src={MAP_IFRAME_SRC} width="100%" height="100%" style={{ border: 0 }} allowFullScreen="" loading="lazy"></iframe>
+                            </div>
+                        </div>
+                    </main>
+
+                    <footer className="text-center mt-20 text-slate-400 text-xs flex flex-col items-center gap-4">
+                        <p className="font-medium">Calle San Marcos 216, San Andrés III Etapa</p>
+                        <button onClick={() => setShowAdmin(!showAdmin)} className="opacity-20 hover:opacity-100 transition-opacity p-2 rounded-lg bg-slate-200">🔐 Panel Admin</button>
+                    </footer>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
